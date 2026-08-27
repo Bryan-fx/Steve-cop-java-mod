@@ -1,42 +1,36 @@
 package com.officersteve;
 
-import de.oliver.fancynpcs.api.FancyNpcsPlugin;
-import de.oliver.fancynpcs.api.Npc;
-import de.oliver.fancynpcs.api.NpcData;
-import de.oliver.fancynpcs.api.NpcManager;
-import de.oliver.fancynpcs.api.actions.ActionTrigger;
-import de.oliver.fancynpcs.api.events.NpcInteractEvent;
-import de.oliver.fancynpcs.api.utils.NpcEquipmentSlot;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.format.TextDecoration;
 
-import org.bukkit.ChatColor;
 import org.bukkit.Color;
 import org.bukkit.Location;
 import org.bukkit.Material;
+import org.bukkit.NamespacedKey;
 import org.bukkit.Particle;
 import org.bukkit.Sound;
 import org.bukkit.World;
+import org.bukkit.entity.Mannequin;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
+import org.bukkit.event.entity.EntityDamageEvent;
+import org.bukkit.event.entity.EntityDeathEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
+import org.bukkit.inventory.EntityEquipment;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.inventory.meta.LeatherArmorMeta;
+import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.util.Vector;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class PoliceListener implements Listener {
-
-    /** Officer Steve's health pool, in half-hearts (20.0 = 10 hearts, same as a player). */
-    private static final double MAX_HEALTH = 20.0;
-
-    /** Vanilla-style invulnerability window between hits, so click-spam can't one-shot him. */
-    private static final long HURT_IMMUNITY_TICKS = 10L;
 
     /** He gives up and despawns this long after spawning if nobody kills him. */
     private static final long DESPAWN_AFTER_TICKS = 3L * 60L * 20L; // 3 minutes
@@ -46,20 +40,17 @@ public class PoliceListener implements Listener {
     private static final double MOVE_SPEED = 0.6;      // blocks per tick-check (called every 4 ticks / ~0.2s, ~3 blocks/sec)
     private static final long ATTACK_COOLDOWN_TICKS = 20L; // 1 second between hits
 
-    // The skin identifier used for Officer Steve. MHF_Steve is a long-standing
-    // Mojang account with the classic default "Steve" skin, commonly used by
-    // plugins for exactly this purpose. If it ever stops resolving, swap this
-    // for another username with the default skin, or a direct skin URL/texture.
-    private static final String STEVE_SKIN = "MHF_Steve";
-
     private final PoliceSteve plugin;
 
-    // Keyed by the FancyNpcs NpcData id (data.getId(), NOT the name we pass in -
-    // FancyNpcs generates its own random id, which is what NpcInteractEvent reports).
-    private final Map<String, OfficerNpcState> activeOfficers = new ConcurrentHashMap<>();
+    /** Marks a mannequin as one of ours, so we never touch decorative ones. */
+    private final NamespacedKey officerKey;
+
+    // Keyed by the mannequin's entity UUID
+    private final Map<UUID, OfficerNpcState> activeOfficers = new ConcurrentHashMap<>();
 
     public PoliceListener(PoliceSteve plugin) {
         this.plugin = plugin;
+        this.officerKey = new NamespacedKey(plugin, "officer_target");
     }
 
     @EventHandler
@@ -80,32 +71,42 @@ public class PoliceListener implements Listener {
             return;
         }
 
-        NpcManager npcManager = FancyNpcsPlugin.get().getNpcManager();
-        String npcName = "policesteve-" + UUID.randomUUID().toString().substring(0, 8);
+        final Mannequin officer;
+        try {
+            officer = world.spawn(location, Mannequin.class, m -> {
+                // Default mannequin profile is the classic Steve skin, so there's
+                // no username lookup or texture fetch to go wrong here.
+                m.setProfile(Mannequin.defaultProfile());
 
-        NpcData data = new NpcData(npcName, killer.getUniqueId(), location);
-        data.setDisplayName(ChatColor.BLUE + "Officer Steve");
-        data.setSkin(STEVE_SKIN);
-        data.setTurnToPlayer(true);
-        data.setShowInTab(false);
-        // No interaction cooldown - we do our own hurt-immunity timing below, and a
-        // FancyNpcs cooldown here would silently swallow hits and make him unkillable.
-        data.setInteractionCooldown(0f);
+                m.customName(Component.text("Officer Steve", NamedTextColor.BLUE));
+                m.setCustomNameVisible(true);
+                m.setDescription(null); // drop the default "NPC" line under the name
 
-        data.addEquipment(NpcEquipmentSlot.HEAD, blueLeather(Material.LEATHER_HELMET));
-        data.addEquipment(NpcEquipmentSlot.CHEST, blueLeather(Material.LEATHER_CHESTPLATE));
-        data.addEquipment(NpcEquipmentSlot.MAINHAND, new ItemStack(Material.IRON_SWORD));
+                // Movable so knockback reads properly; we drive position ourselves.
+                m.setImmovable(false);
+                m.setPersistent(false); // never written to the region file
 
-        Npc npc = FancyNpcsPlugin.get().getNpcAdapter().apply(data);
-        npcManager.registerNpc(npc);
-        npc.create();
-        npc.spawnForAll();
+                EntityEquipment equipment = m.getEquipment();
+                equipment.setHelmet(blueLeather(Material.LEATHER_HELMET));
+                equipment.setChestplate(blueLeather(Material.LEATHER_CHESTPLATE));
+                equipment.setItemInMainHand(new ItemStack(Material.IRON_SWORD));
+                // His uniform isn't loot - only the ticket is.
+                equipment.setHelmetDropChance(0f);
+                equipment.setChestplateDropChance(0f);
+                equipment.setItemInMainHandDropChance(0f);
+
+                m.getPersistentDataContainer().set(officerKey, PersistentDataType.STRING,
+                        killer.getUniqueId().toString());
+            });
+        } catch (IllegalArgumentException ex) {
+            // Mannequins need MC 1.21.9+. Fail loudly rather than silently doing nothing.
+            plugin.getLogger().warning("Could not spawn a mannequin - does this server version support them? " + ex.getMessage());
+            return;
+        }
 
         long expireTick = plugin.getServer().getCurrentTick() + DESPAWN_AFTER_TICKS;
-
-        // Key on the id FancyNpcs actually assigned, so left-click events can find him.
-        activeOfficers.put(npc.getData().getId(),
-                new OfficerNpcState(npc, killer.getUniqueId(), killer.getName(), MAX_HEALTH, expireTick));
+        activeOfficers.put(officer.getUniqueId(),
+                new OfficerNpcState(officer, killer.getUniqueId(), killer.getName(), expireTick));
     }
 
     private ItemStack blueLeather(Material material) {
@@ -120,8 +121,9 @@ public class PoliceListener implements Listener {
 
     /**
      * Called every 4 ticks (~0.2s) from PoliceSteve's scheduler.
-     * Handles the despawn timer, chasing the target, and dealing melee damage,
-     * since FancyNpcs NPCs have no built-in AI or combat of their own.
+     * Handles the despawn timer, chasing the target, and swinging at him.
+     * Mannequins have no AI of their own, so movement is still ours to drive -
+     * but health, damage and death are all vanilla now.
      */
     public void tickOfficers() {
         if (activeOfficers.isEmpty()) {
@@ -130,28 +132,34 @@ public class PoliceListener implements Listener {
 
         long now = plugin.getServer().getCurrentTick();
 
-        for (Map.Entry<String, OfficerNpcState> entry : activeOfficers.entrySet()) {
-            String npcId = entry.getKey();
+        for (Map.Entry<UUID, OfficerNpcState> entry : activeOfficers.entrySet()) {
+            UUID id = entry.getKey();
             OfficerNpcState state = entry.getValue();
+            Mannequin officer = state.getMannequin();
 
-            // Off-duty: he's been chasing for DESPAWN_AFTER_TICKS without being killed.
+            // Killed, unloaded with its chunk, or otherwise gone.
+            if (!officer.isValid()) {
+                activeOfficers.remove(id);
+                continue;
+            }
+
+            // Off duty: he's been chasing for DESPAWN_AFTER_TICKS without being killed.
             if (state.hasExpired(now)) {
-                giveUp(npcId, state);
+                giveUp(state);
                 continue;
             }
 
             Player target = plugin.getServer().getPlayer(state.getTargetUuid());
             if (target == null || !target.isOnline()) {
-                despawn(npcId, state);
+                despawn(state);
                 continue;
             }
 
-            NpcData data = state.getNpc().getData();
-            Location npcLoc = data.getLocation();
+            Location npcLoc = officer.getLocation();
             Location targetLoc = target.getLocation();
 
-            if (npcLoc.getWorld() == null || !npcLoc.getWorld().equals(targetLoc.getWorld())) {
-                despawn(npcId, state);
+            if (!npcLoc.getWorld().equals(targetLoc.getWorld())) {
+                despawn(state);
                 continue;
             }
 
@@ -159,23 +167,18 @@ public class PoliceListener implements Listener {
 
             if (distance <= ATTACK_RANGE) {
                 if (now - state.getLastAttackTick() >= ATTACK_COOLDOWN_TICKS) {
-                    target.damage(ATTACK_DAMAGE);
-
-                    Vector knockback = npcLoc.toVector().subtract(targetLoc.toVector()).multiply(-1);
-                    knockback.setY(0);
-                    if (knockback.lengthSquared() > 0) {
-                        knockback.normalize().multiply(0.4);
-                    }
-                    knockback.setY(0.25);
-                    target.setVelocity(target.getVelocity().add(knockback));
-
-                    target.getWorld().playSound(target.getLocation(), Sound.ENTITY_PLAYER_ATTACK_KNOCKBACK, 1.0f, 1.0f);
+                    officer.swingMainHand();
+                    // Damaging with the officer as the source means vanilla handles
+                    // knockback, hurt animation and death-message attribution.
+                    target.damage(ATTACK_DAMAGE, officer);
                     state.setLastAttackTick(now);
                 }
+                officer.lookAt(targetLoc.getX(), targetLoc.getY(), targetLoc.getZ(),
+                        io.papermc.paper.entity.LookAnchor.EYES);
             } else {
-                // Straight-line homing toward the target. FancyNpcs NPCs have no
-                // built-in pathfinding, so this won't navigate around obstacles
-                // the way a real mob would - it just walks directly at the target.
+                // Straight-line homing toward the target. Mannequins have no
+                // pathfinding, so this won't navigate around obstacles the way a
+                // real mob would - it just walks directly at the target.
                 Vector direction = targetLoc.toVector().subtract(npcLoc.toVector());
                 direction.setY(0);
                 if (direction.lengthSquared() > 0.0001) {
@@ -192,139 +195,100 @@ public class PoliceListener implements Listener {
 
                 newLoc.setDirection(targetLoc.toVector().subtract(newLoc.toVector()));
 
-                data.setLocation(newLoc);
-                state.getNpc().moveForAll();
+                officer.teleport(newLoc);
             }
         }
-    }
-
-    @EventHandler
-    public void onNpcInteract(NpcInteractEvent event) {
-        if (event.getInteractionType() != ActionTrigger.LEFT_CLICK) {
-            return;
-        }
-
-        String npcId = event.getNpc().getData().getId();
-        OfficerNpcState state = activeOfficers.get(npcId);
-        if (state == null || state.isDead()) {
-            return;
-        }
-
-        long now = plugin.getServer().getCurrentTick();
-        if (now - state.getLastDamagedTick() < HURT_IMMUNITY_TICKS) {
-            return; // still in his hurt-immunity window
-        }
-        state.setLastDamagedTick(now);
-
-        Player attacker = event.getPlayer();
-        double damage = weaponDamage(attacker.getInventory().getItemInMainHand());
-        double remaining = state.damage(damage);
-
-        Location npcLoc = state.getNpc().getData().getLocation();
-        World world = npcLoc.getWorld();
-
-        if (remaining > 0.0) {
-            if (world != null) {
-                world.playSound(npcLoc, Sound.ENTITY_PLAYER_HURT, 1.0f, 1.0f);
-                world.spawnParticle(Particle.DAMAGE_INDICATOR, npcLoc.clone().add(0, 1.0, 0), 4, 0.2, 0.4, 0.2, 0.0);
-            }
-            return;
-        }
-
-        // Health hit zero - Officer Steve goes down.
-        killOfficer(npcId, state, attacker);
     }
 
     /**
-     * Rough vanilla-style melee damage for whatever the attacker is holding, so
-     * Officer Steve can be killed with real weapons rather than a fixed click count.
-     * FancyNpcs NPCs aren't real entities, so nothing hooks this up for us.
+     * Officers are only meant to die in a fight, so shrug off environmental chip
+     * damage from being teleported through the world (fall, suffocation, drowning,
+     * fire). Anything a player or mob does still lands.
      */
-    private double weaponDamage(ItemStack held) {
-        if (held == null) {
-            return 1.0;
-        }
-        return switch (held.getType()) {
-            case NETHERITE_SWORD -> 8.0;
-            case DIAMOND_SWORD -> 7.0;
-            case IRON_SWORD, NETHERITE_AXE -> 6.0;
-            case STONE_SWORD, DIAMOND_AXE -> 5.0;
-            case WOODEN_SWORD, GOLDEN_SWORD, IRON_AXE -> 4.0;
-            case STONE_AXE, WOODEN_AXE, GOLDEN_AXE -> 3.0;
-            case NETHERITE_PICKAXE, DIAMOND_PICKAXE, NETHERITE_SHOVEL, DIAMOND_SHOVEL -> 2.0;
-            case TRIDENT -> 9.0;
-            default -> 1.0; // fists and everything else
-        };
-    }
-
-    /** Officer Steve is killed by a player: death effects, ticket drop, cleanup. */
-    private void killOfficer(String npcId, OfficerNpcState state, Player killer) {
-        Location npcLoc = state.getNpc().getData().getLocation();
-        World world = npcLoc.getWorld();
-
-        if (world != null) {
-            world.playSound(npcLoc, Sound.ENTITY_PLAYER_DEATH, 1.0f, 1.0f);
-            world.spawnParticle(Particle.CLOUD, npcLoc.clone().add(0, 1.0, 0), 20, 0.3, 0.6, 0.3, 0.02);
-        }
-
-        killer.sendMessage(ChatColor.BLUE + "Officer Steve" + ChatColor.GRAY + " has been taken down.");
-
-        dropTicket(state);
-        despawn(npcId, state);
-    }
-
-    /** The 3-minute timer ran out: he goes off duty quietly, with no ticket. */
-    private void giveUp(String npcId, OfficerNpcState state) {
-        Location npcLoc = state.getNpc().getData().getLocation();
-        World world = npcLoc.getWorld();
-        if (world != null) {
-            world.playSound(npcLoc, Sound.ENTITY_ILLUSIONER_MIRROR_MOVE, 0.7f, 1.2f);
-            world.spawnParticle(Particle.SMOKE, npcLoc.clone().add(0, 1.0, 0), 20, 0.3, 0.6, 0.3, 0.02);
-        }
-
-        Player target = plugin.getServer().getPlayer(state.getTargetUuid());
-        if (target != null && target.isOnline()) {
-            target.sendMessage(ChatColor.BLUE + "Officer Steve" + ChatColor.GRAY + " has clocked off. You got away with it.");
-        }
-
-        despawn(npcId, state);
-    }
-
-    private void dropTicket(OfficerNpcState state) {
-        Location dropLocation = state.getNpc().getData().getLocation();
-        World world = dropLocation.getWorld();
-        if (world == null) {
+    @EventHandler
+    public void onOfficerDamaged(EntityDamageEvent event) {
+        if (!isOfficer(event.getEntity())) {
             return;
         }
 
+        switch (event.getCause()) {
+            case FALL, SUFFOCATION, DROWNING, FIRE, FIRE_TICK, HOT_FLOOR, CRAMMING, VOID -> event.setCancelled(true);
+            default -> { }
+        }
+    }
+
+    /** Vanilla killed him for us - clear the default drops and issue the ticket. */
+    @EventHandler
+    public void onOfficerDeath(EntityDeathEvent event) {
+        if (!isOfficer(event.getEntity())) {
+            return;
+        }
+
+        OfficerNpcState state = activeOfficers.remove(event.getEntity().getUniqueId());
+        event.getDrops().clear();
+        event.setDroppedExp(0);
+
+        if (state == null) {
+            return; // ours, but we've lost track of it (server reload) - nothing to issue
+        }
+
+        event.getDrops().add(ticketFor(state.getTargetName()));
+
+        Player killer = event.getEntity().getKiller();
+        if (killer != null) {
+            killer.sendMessage(Component.text("Officer Steve", NamedTextColor.BLUE)
+                    .append(Component.text(" has been taken down.", NamedTextColor.GRAY)));
+        }
+    }
+
+    private boolean isOfficer(org.bukkit.entity.Entity entity) {
+        return entity instanceof Mannequin
+                && entity.getPersistentDataContainer().has(officerKey, PersistentDataType.STRING);
+    }
+
+    /** The 3-minute timer ran out: he goes off duty quietly, with no ticket. */
+    private void giveUp(OfficerNpcState state) {
+        Location npcLoc = state.getMannequin().getLocation();
+        World world = npcLoc.getWorld();
+        world.playSound(npcLoc, Sound.ENTITY_ILLUSIONER_MIRROR_MOVE, 0.7f, 1.2f);
+        world.spawnParticle(Particle.SMOKE, npcLoc.clone().add(0, 1.0, 0), 20, 0.3, 0.6, 0.3, 0.02);
+
+        Player target = plugin.getServer().getPlayer(state.getTargetUuid());
+        if (target != null && target.isOnline()) {
+            target.sendMessage(Component.text("Officer Steve", NamedTextColor.BLUE)
+                    .append(Component.text(" has clocked off. You got away with it.", NamedTextColor.GRAY)));
+        }
+
+        despawn(state);
+    }
+
+    private ItemStack ticketFor(String targetName) {
         ItemStack ticket = new ItemStack(Material.PAPER);
         ItemMeta meta = ticket.getItemMeta();
         if (meta != null) {
-            meta.setDisplayName(ChatColor.GOLD + "Ticket to Jaildonia for " + state.getTargetName());
-            List<String> lore = new ArrayList<>();
-            lore.add(ChatColor.GRAY + "Issued by the Jaildonia Police Department");
-            lore.add(ChatColor.GRAY + "Wanted for: Murder");
-            meta.setLore(lore);
+            meta.displayName(Component.text("Ticket to Jaildonia for " + targetName, NamedTextColor.GOLD)
+                    .decoration(TextDecoration.ITALIC, false));
+            meta.lore(List.of(
+                    Component.text("Issued by the Jaildonia Police Department", NamedTextColor.GRAY)
+                            .decoration(TextDecoration.ITALIC, false),
+                    Component.text("Wanted for: Murder", NamedTextColor.GRAY)
+                            .decoration(TextDecoration.ITALIC, false)));
             ticket.setItemMeta(meta);
         }
-
-        world.dropItemNaturally(dropLocation, ticket);
+        return ticket;
     }
 
-    private void despawn(String npcId, OfficerNpcState state) {
-        if (activeOfficers.remove(npcId) == null) {
-            return; // already cleaned up
-        }
-        Npc npc = state.getNpc();
-        npc.removeForAll();
-        FancyNpcsPlugin.get().getNpcManager().removeNpc(npc);
+    /** Remove without a death: no drops, no death event. */
+    private void despawn(OfficerNpcState state) {
+        activeOfficers.remove(state.getMannequin().getUniqueId());
+        state.getMannequin().remove();
     }
 
     public void removeAllOfficers() {
-        for (Map.Entry<String, OfficerNpcState> entry : activeOfficers.entrySet()) {
-            OfficerNpcState state = entry.getValue();
-            state.getNpc().removeForAll();
-            FancyNpcsPlugin.get().getNpcManager().removeNpc(state.getNpc());
+        for (OfficerNpcState state : activeOfficers.values()) {
+            if (state.getMannequin().isValid()) {
+                state.getMannequin().remove();
+            }
         }
         activeOfficers.clear();
     }
