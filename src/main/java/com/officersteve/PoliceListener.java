@@ -34,6 +34,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
+import java.util.concurrent.ThreadLocalRandom;
 
 public class PoliceListener implements Listener {
 
@@ -51,49 +52,37 @@ public class PoliceListener implements Listener {
      * the entity UUID - so officers came out as Alex, Sunny, Zuri and so on. A
      * skin patch overrides rendering directly, with no profile lookup involved.
      */
-    private static final ResolvableProfile STEVE_PROFILE = ResolvableProfile.resolvableProfile()
-            .skinPatch(patch -> patch
-                    .body(Key.key("minecraft", "entity/player/wide/steve"))
-                    .model(PlayerTextures.SkinModel.CLASSIC))
-            .build();
+  private static final ResolvableProfile STEVE_PROFILE = ResolvableProfile.resolvableProfile()
+        .skinPatch(patch -> patch
+                .body(Key.key("minecraft", "entity/player/wide/steve"))
+                .model(PlayerTextures.SkinModel.CLASSIC))
+        .build();
 
-    private final PoliceSteve plugin;
+/**
+ * Slim Alex skin - same idea as STEVE_PROFILE, just the other default model.
+ */
+private static final ResolvableProfile ALEX_PROFILE = ResolvableProfile.resolvableProfile()
+        .skinPatch(patch -> patch
+                .body(Key.key("minecraft", "entity/player/slim/alex"))
+                .model(PlayerTextures.SkinModel.SLIM))
+        .build();
 
-    /** Marks a mannequin as one of ours, so we never touch decorative ones. */
-    private final NamespacedKey officerKey;
+// Chance (0.0-1.0) that a given officer spawns looking like Alex instead
+// of Steve. Re-rolled independently on every spawn, so it genuinely
+// fluctuates rather than alternating in a fixed pattern. Tune to taste.
+private static final double ALEX_SPAWN_CHANCE = 0.3;
 
-    // Keyed by the mannequin's entity UUID
-    private final Map<UUID, OfficerNpcState> activeOfficers = new ConcurrentHashMap<>();
 
-    public PoliceListener(PoliceSteve plugin) {
-        this.plugin = plugin;
-        this.officerKey = new NamespacedKey(plugin, "officer_target");
-    }
+// ── Inside spawnOfficer(), replace these two lines ──
+//
+//     m.setProfile(STEVE_PROFILE);
+//     m.customName(Component.text("Officer Steve", NamedTextColor.BLUE));
+//
+// with:
 
-    @EventHandler
-    public void onPlayerDeath(PlayerDeathEvent event) {
-        Player victim = event.getEntity();
-        Player killer = victim.getKiller();
-
-        if (killer == null || killer.equals(victim)) {
-            return;
-        }
-
-        spawnOfficer(victim.getLocation(), killer);
-    }
-
-    private void spawnOfficer(Location location, Player killer) {
-        World world = location.getWorld();
-        if (world == null) {
-            return;
-        }
-
-        final Mannequin officer;
-        try {
-            officer = world.spawn(location, Mannequin.class, m -> {
-                m.setProfile(STEVE_PROFILE);
-
-                m.customName(Component.text("Officer Steve", NamedTextColor.BLUE));
+boolean isAlex = ThreadLocalRandom.current().nextDouble() < ALEX_SPAWN_CHANCE;
+m.setProfile(isAlex ? ALEX_PROFILE : STEVE_PROFILE);
+m.customName(Component.text(isAlex ? "Officer Alex" : "Officer Steve", NamedTextColor.BLUE));
                 m.setCustomNameVisible(true);
                 m.setDescription(null); // drop the default "NPC" line under the name
 
