@@ -6,7 +6,7 @@
 
     <groupId>com.officersteve</groupId>
     <artifactId>police-steve</artifactId>
-    <version>2.0.0</version>
+    <version>3.0.0</version>
     <packaging>jar</packaging>
 
     <properties>
@@ -21,31 +21,16 @@
             <id>papermc</id>
             <url>https://repo.papermc.io/repository/maven-public/</url>
         </repository>
-        <!-- FancyNpcs API -->
-        <repository>
-            <id>fancyplugins-releases</id>
-            <url>https://repo.fancyinnovations.com/releases</url>
-        </repository>
     </repositories>
 
     <dependencies>
-        <!-- FancyNpcs requires Paper (it does not support vanilla Spigot),
-             so this plugin targets the Paper API instead of spigot-api -->
+        <!-- Mannequins are a Paper/vanilla 1.21.9+ entity, so this plugin
+             targets the Paper API instead of spigot-api -->
         <dependency>
             <groupId>io.papermc.paper</groupId>
             <artifactId>paper-api</artifactId>
             <!-- Match this to the Minecraft version your server runs -->
             <version>26.2.build.119-stable</version>
-            <scope>provided</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>de.oliver</groupId>
-            <artifactId>FancyNpcs</artifactId>
-            <!-- The jar you supplied was build 2.11.0+370 - if this exact
-                 version isn't in the repo, check https://repo.fancyplugins.de/releases
-                 or the GitHub releases page for the closest published version -->
-            <version>2.11.0</version>
             <scope>provided</scope>
         </dependency>
     </dependencies>
