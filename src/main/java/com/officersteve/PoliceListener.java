@@ -1,5 +1,8 @@
 package com.officersteve;
 
+import io.papermc.paper.datacomponent.item.ResolvableProfile;
+
+import net.kyori.adventure.key.Key;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.format.TextDecoration;
@@ -23,12 +26,14 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.inventory.meta.LeatherArmorMeta;
 import org.bukkit.persistence.PersistentDataType;
+import org.bukkit.profile.PlayerTextures;
 import org.bukkit.util.Vector;
 
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.Level;
 
 public class PoliceListener implements Listener {
 
@@ -39,6 +44,18 @@ public class PoliceListener implements Listener {
     private static final double ATTACK_RANGE = 2.5;    // blocks
     private static final double MOVE_SPEED = 0.6;      // blocks per tick-check (called every 4 ticks / ~0.2s, ~3 blocks/sec)
     private static final long ATTACK_COOLDOWN_TICKS = 20L; // 1 second between hits
+
+    /**
+     * Always the classic wide Steve skin. Mannequin.defaultProfile() leaves the
+     * skin unset, which makes the client pick one of the nine default skins from
+     * the entity UUID - so officers came out as Alex, Sunny, Zuri and so on. A
+     * skin patch overrides rendering directly, with no profile lookup involved.
+     */
+    private static final ResolvableProfile STEVE_PROFILE = ResolvableProfile.resolvableProfile()
+            .skinPatch(patch -> patch
+                    .body(Key.key("minecraft", "entity/player/wide/steve"))
+                    .model(PlayerTextures.SkinModel.CLASSIC))
+            .build();
 
     private final PoliceSteve plugin;
 
@@ -74,9 +91,7 @@ public class PoliceListener implements Listener {
         final Mannequin officer;
         try {
             officer = world.spawn(location, Mannequin.class, m -> {
-                // Default mannequin profile is the classic Steve skin, so there's
-                // no username lookup or texture fetch to go wrong here.
-                m.setProfile(Mannequin.defaultProfile());
+                m.setProfile(STEVE_PROFILE);
 
                 m.customName(Component.text("Officer Steve", NamedTextColor.BLUE));
                 m.setCustomNameVisible(true);
@@ -90,13 +105,13 @@ public class PoliceListener implements Listener {
                 equipment.setHelmet(blueLeather(Material.LEATHER_HELMET));
                 equipment.setChestplate(blueLeather(Material.LEATHER_CHESTPLATE));
                 equipment.setItemInMainHand(new ItemStack(Material.IRON_SWORD));
+
                 m.getPersistentDataContainer().set(officerKey, PersistentDataType.STRING,
                         killer.getUniqueId().toString());
             });
         } catch (IllegalArgumentException | UnsupportedOperationException ex) {
-            // Mannequins need MC 1.21.9+. Fail loudly rather than silently doing nothing.
-            plugin.getLogger().log(java.util.logging.Level.WARNING,
-			    "Could not spawn Officer Steve", ex);
+            // Log the real cause and a stack trace rather than guessing at why.
+            plugin.getLogger().log(Level.WARNING, "Could not spawn Officer Steve", ex);
             return;
         }
 
