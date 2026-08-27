@@ -90,17 +90,13 @@ public class PoliceListener implements Listener {
                 equipment.setHelmet(blueLeather(Material.LEATHER_HELMET));
                 equipment.setChestplate(blueLeather(Material.LEATHER_CHESTPLATE));
                 equipment.setItemInMainHand(new ItemStack(Material.IRON_SWORD));
-                // His uniform isn't loot - only the ticket is.
-                equipment.setHelmetDropChance(0f);
-                equipment.setChestplateDropChance(0f);
-                equipment.setItemInMainHandDropChance(0f);
-
                 m.getPersistentDataContainer().set(officerKey, PersistentDataType.STRING,
                         killer.getUniqueId().toString());
             });
-        } catch (IllegalArgumentException ex) {
+        } catch (IllegalArgumentException | UnsupportedOperationException ex) {
             // Mannequins need MC 1.21.9+. Fail loudly rather than silently doing nothing.
-            plugin.getLogger().warning("Could not spawn a mannequin - does this server version support them? " + ex.getMessage());
+            plugin.getLogger().log(java.util.logging.Level.WARNING,
+			    "Could not spawn Officer Steve", ex);
             return;
         }
 
